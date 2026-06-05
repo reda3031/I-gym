@@ -1,0 +1,22 @@
+[Unit]
+Description=I-Gym Monitor Daemon — Surveillance surfrequentation
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=www-data
+ExecStart=/usr/local/bin/igym_monitor
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Variables environnement MySQL
+Environment="DB_HOST=127.0.0.1"
+Environment="DB_PORT=3306"
+Environment="DB_NAME=igym"
+Environment="DB_USER=root"
+Environment="DB_PASS="
+
+[Install]
+WantedBy=multi-user.target
