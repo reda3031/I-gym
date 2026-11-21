@@ -16,40 +16,79 @@ class AttendanceController extends Controller
 {
     /**
      * Check-in via QR Code — WOW Feature #1
+     * Sécurisé par verrouillage pessimiste (lockForUpdate) et rotation atomique de token.
      */
     public function checkIn(Request $request)
     {
-        $request->validate(['qr_token' => 'required|string']);
+        $request->validate([
+            'qr_token' => 'required|string',
+            'room_id'  => 'nullable|integer',
+        ]);
 
-        // Trouver l'utilisateur via son QR token
-        $user = User::where('qr_token', $request->qr_token)->first();
+        return DB::transaction(function () use ($request) {
+            // Verrouiller la ligne utilisateur pour sérialiser les requêtes concurrentes
+            $user = User::where('qr_token', $request->qr_token)->lockForUpdate()->first();
 
-        if (!$user) {
-            return response()->json([
-                'status'  => 'denied',
-                'message' => '❌ QR Code invalide ou expiré.',
-            ], 422);
-        }
+            if (!$user) {
+                return response()->json([
+                    'status'  => 'denied',
+                    'message' => '❌ QR Code invalide ou expiré.',
+                ], 422);
+            }
 
-        // Vérifier l'abonnement actif
-        $hasActiveSub = $user->subscriptions()
-            ->where('status', 'active')
-            ->where('end_date', '>=', now()->toDateString())
-            ->exists();
+            // Vérifier l'abonnement actif
+            $hasActiveSub = $user->subscriptions()
+                ->where('status', 'active')
+                ->where('end_date', '>=', now()->toDateString())
+                ->exists();
 
-        if (!$hasActiveSub) {
-            return response()->json([
-                'status'              => 'denied',
-                'user_name'           => $user->name,
-                'subscription_status' => 'expired',
-                'message'             => '❌ Accès Refusé — Abonnement expiré.',
-            ]);
-        }
+            if (!$hasActiveSub) {
+                return response()->json([
+                    'status'              => 'denied',
+                    'user_name'           => $user->name,
+                    'subscription_status' => 'expired',
+                    'message'             => '❌ Accès Refusé — Abonnement expiré.',
+                ]);
+            }
 
-        // Trouver la salle principale (id=1 par défaut)
-        $room = Room::first();
+            // Anti-doublon immédiat (< 60 secondes sans check-out)
+            $recentActiveLog = AttendanceLog::where('user_id', $user->id)
+                ->where('status', 'granted')
+                ->whereNull('checked_out_at')
+                ->where('checked_in_at', '>=', now()->subSeconds(60))
+                ->first();
 
-        DB::transaction(function () use ($user, $room) {
+            if ($recentActiveLog) {
+                return response()->json([
+                    'status'  => 'denied',
+                    'message' => '⚠️ Check-in déjà effectué récemment. Veuillez patienter avant un nouveau scan.',
+                ], 429);
+            }
+
+            // Trouver la salle en respectant le cloisonnement multi-tenant (gym_id)
+            $room = null;
+            if ($request->filled('room_id')) {
+                $room = Room::where('id', $request->room_id)
+                    ->when($user->gym_id, fn($q) => $q->where('gym_id', $user->gym_id))
+                    ->lockForUpdate()
+                    ->first();
+            }
+
+            if (!$room && $user->gym_id) {
+                $room = Room::where('gym_id', $user->gym_id)->lockForUpdate()->first();
+            }
+
+            if (!$room) {
+                $room = Room::lockForUpdate()->first();
+            }
+
+            if (!$room) {
+                return response()->json([
+                    'status'  => 'denied',
+                    'message' => '❌ Aucune salle disponible pour enregistrer l\'accès.',
+                ], 422);
+            }
+
             // Enregistrer la présence
             AttendanceLog::create([
                 'user_id'    => $user->id,
@@ -58,7 +97,7 @@ class AttendanceController extends Controller
                 'status'     => 'granted',
             ]);
 
-            // Créer une notification de passage / check-in
+            // Notification pour l'utilisateur
             Notification::create([
                 'user_id'   => $user->id,
                 'type'      => 'check_in_success',
@@ -90,27 +129,24 @@ class AttendanceController extends Controller
                 default                     => 'bronze',
             };
 
-            // Régénérer QR token après scan
+            // Régénérer immédiatement le token QR (invalidation instantanée des replays)
             $user->qr_token = Str::random(64);
             $user->save();
 
             // Attribuer badges automatiquement
             $this->attributeBadges($user);
+
+            return response()->json([
+                'status'              => 'granted',
+                'user_name'           => $user->name,
+                'subscription_status' => 'active',
+                'streak_days'         => $user->streak_days,
+                'total_sessions'      => $user->total_sessions,
+                'level'               => $user->level,
+                'message'             => "✅ Accès Accordé — Bienvenue {$user->name} !",
+                'new_qr_token'        => $user->qr_token,
+            ]);
         });
-
-        // Recharger l'utilisateur
-        $user->refresh();
-
-        return response()->json([
-            'status'              => 'granted',
-            'user_name'           => $user->name,
-            'subscription_status' => 'active',
-            'streak_days'         => $user->streak_days,
-            'total_sessions'      => $user->total_sessions,
-            'level'               => $user->level,
-            'message'             => "✅ Accès Accordé — Bienvenue {$user->name} !",
-            'new_qr_token'        => $user->qr_token,
-        ]);
     }
 
     /**
@@ -120,32 +156,46 @@ class AttendanceController extends Controller
     {
         $user = $request->user();
 
-        $log = AttendanceLog::where('user_id', $user->id)
-            ->whereNull('checked_out_at')
-            ->latest()
-            ->first();
+        return DB::transaction(function () use ($user) {
+            $log = AttendanceLog::where('user_id', $user->id)
+                ->whereNull('checked_out_at')
+                ->latest()
+                ->lockForUpdate()
+                ->first();
 
-        if (!$log) {
-            return response()->json(['message' => 'Aucune séance en cours.'], 404);
-        }
+            if (!$log) {
+                return response()->json(['message' => 'Aucune séance en cours.'], 404);
+            }
 
-        $log->update(['checked_out_at' => now()]);
+            $log->update(['checked_out_at' => now()]);
 
-        // Décrémenter le compteur de la salle
-        $room = Room::find($log->room_id);
-        if ($room && $room->current_count > 0) {
-            $room->decrement('current_count');
-        }
+            // Décrémenter le compteur de la salle de manière atomique
+            $room = Room::where('id', $log->room_id)->lockForUpdate()->first();
+            if ($room && $room->current_count > 0) {
+                $room->decrement('current_count');
+            }
 
-        return response()->json(['message' => '✅ Séance terminée. À bientôt !']);
+            return response()->json(['message' => '✅ Séance terminée. À bientôt !']);
+        });
     }
 
     /**
-     * Récapitulatif hebdomadaire d'un adhérent
+     * Récapitulatif hebdomadaire d'un adhérent (avec contrôle de visibilité)
      */
     public function weeklySummary(Request $request, int $userId)
     {
+        $authUser = $request->user();
         $user = User::findOrFail($userId);
+
+        if ($authUser->isAdherent() && $authUser->id !== $userId) {
+            return response()->json(['message' => 'Accès interdit.'], 403);
+        }
+
+        if (($authUser->isCoach() || $authUser->isAdmin()) && !$authUser->isSuperAdmin()) {
+            if ($authUser->gym_id && $user->gym_id && $authUser->gym_id !== $user->gym_id) {
+                return response()->json(['message' => 'Accès interdit (autre salle).'], 403);
+            }
+        }
 
         $weekStart = now()->startOfWeek();
         $sessionsThisWeek = AttendanceLog::where('user_id', $userId)
@@ -229,7 +279,6 @@ class AttendanceController extends Controller
         }
 
         foreach ($newBadges as $badgeType) {
-            // Vérifier que le badge n'existe pas déjà
             $exists = Badge::where('user_id', $user->id)
                 ->where('badge_type', $badgeType)
                 ->exists();

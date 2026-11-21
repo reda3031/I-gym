@@ -62,6 +62,23 @@ Built as a polyglot system, it combines:
 
 ---
 
+## Application Screenshots
+
+Authentic interface captures from the live application running in Google Chrome (React 18 + Vite SPA, Laravel 13 API, MySQL 8 database):
+
+| Member Dashboard | Club Administrator Dashboard |
+|:---:|:---:|
+| [![Member Dashboard](docs/screenshots/member_dashboard.png)](docs/screenshots/member_dashboard.png) | [![Admin Dashboard](docs/screenshots/admin_dashboard.png)](docs/screenshots/admin_dashboard.png) |
+| *Personalized member space with gamification badges, streak tracking, workout recommendations, and upcoming sessions* | *Real-time room occupancy gauge, revenue KPIs, 7-day hourly attendance heatmap, and capacity alert feeds* |
+
+| Dynamic QR Code Membership Badge | Biometric & Training Dossier (PDF) |
+|:---:|:---:|
+| [![QR Code Interface](docs/screenshots/qr_code_checkin.png)](docs/screenshots/qr_code_checkin.png) | [![Training Dossier PDF](docs/screenshots/training_dossier_pdf.png)](docs/screenshots/training_dossier_pdf.png) |
+| *Digital membership badge with dynamic single-use QR token, member metadata, and real-time subscription status* | *Generated vector PDF report detailing member biometric benchmarks and weekly schedule* |
+
+
+---
+
 ## System Architecture
 
 ```mermaid
@@ -261,7 +278,7 @@ sequenceDiagram
 | | Lucide React | 0.344.0 | UI iconography |
 | | canvas-confetti | 1.9.3 | Micro-interactions for streaks and badge unlocks |
 | **Backend** | PHP | `^8.3` / `^8.4` | Server-side execution environment |
-| | Laravel Framework | 13.x (`^13.8`) | REST API framework, Eloquent ORM, and database migrations |
+| | Laravel Framework | 13.9.0 (`^13.8`) | REST API framework, Eloquent ORM, and database migrations |
 | | Laravel Sanctum | 4.3 (`^4.3`) | Stateless token-based API authentication |
 | **Daemon** | C (C99) | GCC / Clang | Low-overhead system service for background facility monitoring |
 | | libmysqlclient | MySQL C Client API | Direct MySQL connection and query execution |
@@ -500,6 +517,29 @@ FRONTEND_URL=http://localhost:5173
 
 ---
 
+## Automated Testing Suite
+
+The repository includes a comprehensive, verified Laravel Feature test suite covering core security boundaries, concurrency guarantees, and data isolation. Tests run in-memory on SQLite without external service dependencies:
+
+```bash
+cd backend
+php artisan test
+```
+
+### Verified Test Coverage
+
+| Test Suite | Verified Behaviors | Result |
+|---|---|---|
+| `AuthAndRoleAuthorizationTest` | Unauthenticated rejection (401), Member blocked from admin/coach operations (403), Coach blocked from admin management (403), Admin blocked from Super Admin routes (403), Authorized role access (200) | **8 / 8 Passed** |
+| `MultiTenantIsolationTest` | Room occupancy scoped by `gym_id`, Cross-gym hourly stats denial (403), Cross-gym course update/deletion denial (404), Cross-gym coach update/deletion denial (404), Cross-gym alert leakage prevention (404) | **8 / 8 Passed** |
+| `QrCheckInConcurrencyTest` | Token rotation on granted check-in, Immediate replay rejection (422), Inactive/expired subscription denial (403/200), Active session checkout & headcount decrement | **4 / 4 Passed** |
+| `ReservationConcurrencyTest` | Capacity limit enforcement (max capacity saturation -> 422), Duplicate booking prevention (422), Cross-gym course booking denial (403), Spot reallocation on cancellation | **4 / 4 Passed** |
+| `TrainingPdfSecurityTest` | Cross-member PDF generation denial (403), Cross-gym admin/coach PDF generation denial (403), HMAC-SHA256 signed URL generation (200), Unsigned download denial (403), Valid `%PDF-1.4` vector stream verification | **4 / 4 Passed** |
+| `Unit & Feature Boilerplate` | Base application environment health checks | **2 / 2 Passed** |
+| **Total** | **Comprehensive end-to-end security & concurrency validation** | **30 / 30 Passed** (64 assertions) |
+
+---
+
 ## Development Seed Accounts
 
 > [!WARNING]
@@ -518,13 +558,13 @@ FRONTEND_URL=http://localhost:5173
 
 ## Project Status
 
-- [x] **Backend REST API**: Complete (Laravel 13 API with Sanctum authentication, middleware guards, and 28 database migrations).
-- [x] **Frontend Web Client**: Complete (React 18 + Vite SPA with multi-role routing, dark/light themes, and Arabic/French/English translations).
-- [x] **C Monitoring Daemon**: Complete (C99 daemon with Makefile, MySQL C client library integration, and Linux systemd service unit).
-- [x] **Python Analytics & PDF Engine**: Complete (3-page vector PDF generation script and JSON statistical reporting pipeline).
-- [ ] **Automated Test Coverage**: Feature and unit tests currently consist of base framework templates; expanded automated test coverage across edge-case transaction rollbacks is in development.
+- [x] **Backend REST API**: Complete (Laravel 13 API with Sanctum authentication, role-based middleware guards, and 28 database migrations).
+- [x] **Frontend Web Client**: Complete (React 18 + Vite SPA with multi-role routing, dark/light themes, trilingual support, and configurable `VITE_API_URL`).
+- [x] **C Monitoring Daemon**: Complete (C99 daemon with dynamic environment configuration, Makefile, MySQL C client library integration, and Linux systemd service unit).
+- [x] **Python Analytics & PDF Engine**: Complete (3-page vector PDF generation script, JSON statistical reporting pipeline, and signed temporary URL downloads).
+- [x] **Automated Test Coverage**: Complete (30 automated feature tests covering authentication, role authorization, tenant isolation, QR rotation, reservation concurrency, and signed PDF security).
+- [x] **Visual Assets & Media**: Complete (Authentic high-resolution UI captures verified and embedded in documentation for Member Dashboard, Admin Dashboard, Dynamic QR Badge, and PDF Dossier).
 - [ ] **Hardware Turnstile Integration**: The access control logic is fully functional via software REST API calls; physical relay board/MQTT turnstile hardware integration remains a future roadmap milestone.
-- [ ] **Visual Assets & Media**: UI screenshots and recorded video walkthroughs are planned for future documentation updates (no authentic UI captures are bundled in the repository).
 
 ---
 

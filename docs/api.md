@@ -128,14 +128,18 @@ Toutes les routes protégées nécessitent : `Authorization: Bearer {token}`
 
 ## PDF Programme
 
-### GET /training/generate-pdf/{userId} *(auth)*
+### GET /training/generate-pdf/{userId} *(auth: adherent propre profil | coach/admin même salle)*
 **Réponse :** `{ message, download_url, filename }`
+*Note : `download_url` est une URL signée temporaire (HMAC SHA-256) valide pendant 30 minutes.*
+
+### GET /training/download-pdf/{userId}?signature=...&expires=... *(URL signée)*
+**Réponse :** Flux binaire `application/pdf` du dossier sportif 3 pages (ou fallback PDF vectoriel 1.4).
 
 ---
 
-## Admin
+## Admin *(auth: admin, super_admin)*
 
-### GET /admin/kpis *(auth)*
+### GET /admin/kpis *(auth: admin, super_admin)*
 **Réponse :** `{ active_members, courses_today, unread_alerts, monthly_revenue, reservations_per_day }`
 
 ### GET /admin/alerts *(auth)*

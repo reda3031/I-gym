@@ -65,13 +65,20 @@ Le démon surveille toutes les salles toutes les 60 secondes :
 
 ## Variables d'environnement
 
-Modifiez directement les constantes dans `monitor.c` :
-```c
-#define DB_HOST  "127.0.0.1"
-#define DB_NAME  "igym"
-#define DB_USER  "root"
-#define DB_PASS  "votre_mot_de_passe"
+Le démon lit directement la configuration depuis les variables d'environnement (avec des valeurs par défaut sécurisées pour le développement local) :
+
+```bash
+export DB_HOST="127.0.0.1"
+export DB_PORT="3306"
+export DB_DATABASE="igym"      # ou DB_NAME
+export DB_USERNAME="root"      # ou DB_USER
+export DB_PASSWORD=""          # ou DB_PASS
+export LOG_FILE="/tmp/igym_monitor.log"
+export SLEEP_SEC="60"
+export ALERT_THRESHOLD="0.80"  # 80%
 ```
+
+Sous Linux avec systemd, ces variables sont configurées dans `igym.service` sous la directive `Environment=`.
 
 ## Lecture des alertes depuis Laravel
 

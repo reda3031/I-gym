@@ -10,17 +10,22 @@ use Illuminate\Http\Request;
 class RoomController extends Controller
 {
     /**
-     * Occupation en temps réel de toutes les salles — WOW Feature #2
+     * Occupation en temps réel des salles — cloisonné par gym_id
      */
-    public function occupancy()
+    public function occupancy(Request $request)
     {
-        $rooms = Room::all()->map(function (Room $room) {
-            // Recalculer depuis les logs actifs (pas de check-out)
+        $user = $request->user();
+        $query = Room::query();
+
+        if ($user && !$user->isSuperAdmin() && $user->gym_id) {
+            $query->where('gym_id', $user->gym_id);
+        }
+
+        $rooms = $query->get()->map(function (Room $room) {
             $liveCount = AttendanceLog::where('room_id', $room->id)
                 ->whereNull('checked_out_at')
                 ->count();
 
-            // Synchroniser si nécessaire
             if ($room->current_count !== $liveCount) {
                 $room->update(['current_count' => $liveCount]);
             }
@@ -43,6 +48,7 @@ class RoomController extends Controller
                 'current_count'  => $liveCount,
                 'occupancy_rate' => $rate,
                 'status'         => $status,
+                'gym_id'         => $room->gym_id,
             ];
         });
 
@@ -54,10 +60,16 @@ class RoomController extends Controller
      */
     public function hourlyStats(Request $request, int $roomId)
     {
+        $user = $request->user();
         $room = Room::findOrFail($roomId);
+
+        // Cloisonnement multi-tenant
+        if ($user && !$user->isSuperAdmin() && $user->gym_id && $room->gym_id !== $user->gym_id) {
+            return response()->json(['message' => 'Accès refusé.'], 403);
+        }
+
         $since = now()->subHours(24);
 
-        // Grouper les check-ins par heure
         $hourlyData = AttendanceLog::where('room_id', $roomId)
             ->where('checked_in_at', '>=', $since)
             ->selectRaw('HOUR(checked_in_at) as hour, COUNT(*) as count')
@@ -66,7 +78,6 @@ class RoomController extends Controller
             ->get()
             ->keyBy('hour');
 
-        // Construire tableau complet 24h
         $stats = [];
         for ($h = 0; $h < 24; $h++) {
             $stats[] = [
@@ -82,10 +93,17 @@ class RoomController extends Controller
     }
 
     /**
-     * Lister toutes les salles
+     * Lister les salles (cloisonné par salle)
      */
-    public function index()
+    public function index(Request $request)
     {
-        return response()->json(Room::all());
+        $user = $request->user();
+        $query = Room::query();
+
+        if ($user && !$user->isSuperAdmin() && $user->gym_id) {
+            $query->where('gym_id', $user->gym_id);
+        }
+
+        return response()->json($query->get());
     }
 }

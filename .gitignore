@@ -1,0 +1,61 @@
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Node.js & Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/.env.local
+frontend/.env.*.local
+*.log
+
+# PHP & Laravel Backend
+backend/vendor/
+backend/.env
+backend/.env.backup
+backend/.env.production
+backend/.phpunit.result.cache
+backend/.phpunit.cache/
+backend/storage/*.key
+backend/storage/app/private/
+backend/storage/app/public/programs/*.pdf
+backend/storage/framework/cache/data/*
+backend/storage/framework/sessions/*
+backend/storage/framework/views/*
+backend/storage/framework/testing/*
+backend/storage/logs/*.log
+backend/storage/reports/*.json
+backend/bootstrap/cache/*.php
+
+# C Daemon build artifacts
+daemon/igym_monitor
+daemon/*.o
+
+# Python Analytics
+analytics/__pycache__/
+analytics/*.pyc
+analytics/.pytest_cache/
+
+# Databases & local sqlite
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+*.db
+backend/igym
+

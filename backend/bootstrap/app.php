@@ -14,6 +14,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->alias([
             'subscription.active' => \App\Http\Middleware\CheckActiveSubscription::class,
+            'role'                => \App\Http\Middleware\EnsureUserRole::class,
         ]);
 
         // CORS global pour tous les appels API depuis localhost:5173

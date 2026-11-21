@@ -38,16 +38,20 @@ Route::prefix('v1')->group(function () {
         Route::put('/user/profile', [AuthController::class, 'updateProfile']);
         Route::get('/user/avatar',  [AuthController::class, 'getAvatar']);
 
-        // Gyms (statistiques — protégé)
-        Route::get('/gyms/{id}/stats', [GymController::class, 'stats']);
-        Route::get('/super-admin/gyms', [GymController::class, 'superAdminDashboard']);
-        Route::post('/super-admin/gyms', [GymController::class, 'store']);
-        Route::put('/super-admin/gyms/{id}', [GymController::class, 'updateGym']);
-        Route::get('/super-admin/users', [GymController::class, 'superAdminUsers']);
-        Route::get('/super-admin/all-coaches', [GymController::class, 'getAllCoachesAndAdmins']);
-        Route::post('/super-admin/impersonate/{id}', [\App\Http\Controllers\API\SuperAdminController::class, 'impersonate']);
-        Route::post('/super-admin/stop-impersonate', [\App\Http\Controllers\API\SuperAdminController::class, 'stopImpersonate']);
-        Route::get('/super-admin/impersonation-logs', [\App\Http\Controllers\API\SuperAdminController::class, 'getImpersonationLogs']);
+        // Gyms (statistiques — protégé pour admin/super_admin)
+        Route::get('/gyms/{id}/stats', [GymController::class, 'stats'])->middleware(['role:admin,super_admin']);
+
+        // Super Admin (protégé strictement pour super_admin)
+        Route::middleware(['role:super_admin'])->prefix('super-admin')->group(function () {
+            Route::get('/gyms', [GymController::class, 'superAdminDashboard']);
+            Route::post('/gyms', [GymController::class, 'store']);
+            Route::put('/gyms/{id}', [GymController::class, 'updateGym']);
+            Route::get('/users', [GymController::class, 'superAdminUsers']);
+            Route::get('/all-coaches', [GymController::class, 'getAllCoachesAndAdmins']);
+            Route::post('/impersonate/{id}', [\App\Http\Controllers\API\SuperAdminController::class, 'impersonate']);
+            Route::post('/stop-impersonate', [\App\Http\Controllers\API\SuperAdminController::class, 'stopImpersonate']);
+            Route::get('/impersonation-logs', [\App\Http\Controllers\API\SuperAdminController::class, 'getImpersonationLogs']);
+        });
 
         // ── Présence QR Code ────────────────────────────────────────────
         Route::post('/attendance/check-in',               [AttendanceController::class, 'checkIn']);
@@ -84,7 +88,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/training/generate-pdf/{userId}', [TrainingPdfController::class, 'generate']);
 
         // ── Coach Routes ────────────────────────────────────────────────
-        Route::prefix('coach')->group(function () {
+        Route::middleware(['role:coach,admin,super_admin'])->prefix('coach')->group(function () {
             Route::get('/dashboard',          [\App\Http\Controllers\API\CoachController::class, 'dashboard']);
             Route::put('/availabilities',     [\App\Http\Controllers\API\CoachController::class, 'updateAvailabilities']);
             Route::post('/status',            [\App\Http\Controllers\API\CoachController::class, 'toggleStatus']);
@@ -102,7 +106,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/members/challenges/{id}/join', [\App\Http\Controllers\API\CoachController::class, 'joinChallenge']);
 
         // ── Admin ────────────────────────────────────────────────────────
-        Route::prefix('admin')->group(function () {
+        Route::middleware(['role:admin,super_admin'])->prefix('admin')->group(function () {
             // Dashboard KPIs
             Route::get('/kpis',               [AdminController::class, 'kpis']);
             Route::get('/alerts',             [AdminController::class, 'alerts']);
@@ -142,4 +146,8 @@ Route::prefix('v1')->group(function () {
             Route::get('/heatmap', [AdminController::class, 'heatmap']);
         });
     });
+
+    // ── Route de téléchargement PDF sécurisée (par signature temporaire) ──
+    Route::get('/training/download-pdf/{userId}', [TrainingPdfController::class, 'download'])
+        ->name('training.pdf.download');
 });

@@ -320,7 +320,11 @@ class AdminController extends Controller
      */
     public function updateCoach(Request $request, $id)
     {
-        $u = User::where('id', $id)->where('role', 'coach')->firstOrFail();
+        $user = $request->user();
+        $u = User::where('id', $id)
+            ->where('role', 'coach')
+            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('gym_id', $user->gym_id))
+            ->firstOrFail();
 
         $request->validate([
             'name' => 'required|string|max:255',
@@ -380,7 +384,11 @@ class AdminController extends Controller
      */
     public function deleteCoach(Request $request, $id)
     {
-        $u = User::where('id', $id)->where('role', 'coach')->firstOrFail();
+        $user = $request->user();
+        $u = User::where('id', $id)
+            ->where('role', 'coach')
+            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('gym_id', $user->gym_id))
+            ->firstOrFail();
         
         $u->delete();
 
@@ -510,8 +518,11 @@ class AdminController extends Controller
      */
     public function updateCourse(Request $request, int $id)
     {
-        $gymId  = $request->user()->gym_id;
-        $course = Course::where('id', $id)->where('gym_id', $gymId)->firstOrFail();
+        $user   = $request->user();
+        $gymId  = $user->gym_id;
+        $course = Course::where('id', $id)
+            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('gym_id', $gymId))
+            ->firstOrFail();
 
         $validated = $request->validate([
             'name'         => 'sometimes|string|max:120',
@@ -537,8 +548,11 @@ class AdminController extends Controller
      */
     public function deleteCourse(Request $request, int $id)
     {
-        $gymId  = $request->user()->gym_id;
-        $course = Course::where('id', $id)->where('gym_id', $gymId)->firstOrFail();
+        $user   = $request->user();
+        $gymId  = $user->gym_id;
+        $course = Course::where('id', $id)
+            ->when(!$user->isSuperAdmin(), fn($q) => $q->where('gym_id', $gymId))
+            ->firstOrFail();
         $course->delete();
 
         return response()->json(['message' => 'Cours supprimé.']);
@@ -558,6 +572,7 @@ class AdminController extends Controller
                 'room:id,name',
                 'reservations' => fn($q) => $q->where('status', 'confirmed')->with('user:id,name,email,level,avatar'),
             ])
+            ->when(!$request->user()->isSuperAdmin() && $gymId, fn($q) => $q->where('gym_id', $gymId))
             ->where('gym_id', $gymId)
             ->whereDate('starts_at', today())
             ->orderBy('starts_at')
@@ -630,7 +645,13 @@ class AdminController extends Controller
 
     public function alerts(Request $request)
     {
+        $user  = $request->user();
+        $gymId = $user->gym_id;
+
         $alerts = Alert::with('room:id,name')
+            ->when(!$user->isSuperAdmin() && $gymId, function ($q) use ($gymId) {
+                $q->whereHas('room', fn($rq) => $rq->where('gym_id', $gymId));
+            })
             ->orderBy('created_at', 'desc')
             ->limit(20)
             ->get();
@@ -638,9 +659,16 @@ class AdminController extends Controller
         return response()->json($alerts);
     }
 
-    public function markAlertRead(int $id)
+    public function markAlertRead(Request $request, int $id)
     {
-        Alert::findOrFail($id)->update(['is_read' => true]);
+        $user  = $request->user();
+        $gymId = $user->gym_id;
+
+        $alert = Alert::when(!$user->isSuperAdmin() && $gymId, function ($q) use ($gymId) {
+            $q->whereHas('room', fn($rq) => $rq->where('gym_id', $gymId));
+        })->findOrFail($id);
+
+        $alert->update(['is_read' => true]);
         return response()->json(['message' => 'Alerte marquée comme lue.']);
     }
 

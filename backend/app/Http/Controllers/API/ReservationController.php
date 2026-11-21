@@ -8,6 +8,7 @@ use App\Models\Notification;
 use App\Models\Reservation;
 use App\Models\Alert;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 
 class ReservationController extends Controller
 {
@@ -26,8 +27,8 @@ class ReservationController extends Controller
             ->where('status', 'active')
             ->where('starts_at', '>', now());
 
-        // Filtrer par gym (les utilisateurs ne voient QUE leur gym)
-        if ($gymId) {
+        // Filtrer par gym (les utilisateurs ne voient QUE leur gym, sauf super_admin)
+        if ($gymId && !$user->isSuperAdmin()) {
             $query->where('gym_id', $gymId);
         }
 
@@ -80,92 +81,98 @@ class ReservationController extends Controller
     }
 
     /**
-     * Réservation d'un cours
+     * Réservation d'un cours avec transaction atomique et verrouillage pessimiste
      */
     public function store(Request $request)
     {
         $request->validate(['course_id' => 'required|exists:courses,id']);
 
-        $user   = $request->user();
-        $course = Course::findOrFail($request->course_id);
+        $user = $request->user();
 
-        // Vérifier que le cours n'est pas annulé
-        if ($course->status === 'cancelled') {
-            return response()->json(['message' => 'Ce cours a été annulé.'], 422);
-        }
+        return DB::transaction(function () use ($user, $request) {
+            // Verrouiller la ligne du cours pour sérialiser les réservations simultanées
+            $course = Course::where('id', $request->course_id)->lockForUpdate()->firstOrFail();
 
-        // Vérifier que le cours est dans la même gym que l'utilisateur
-        if ($user->gym_id && $course->gym_id && $user->gym_id !== $course->gym_id) {
-            return response()->json(['message' => 'Ce cours n\'appartient pas à votre salle.'], 403);
-        }
-
-        // Vérifier places disponibles via un comptage précis en base
-        $confirmedCount = Reservation::where('course_id', $course->id)
-            ->where('status', 'confirmed')
-            ->count();
-
-        if ($confirmedCount >= $course->max_capacity) {
-            return response()->json(['message' => 'Ce cours est complet.'], 422);
-        }
-
-        // Vérifier si une réservation existe déjà (confirmée ou annulée)
-        $reservation = Reservation::where('user_id', $user->id)
-            ->where('course_id', $course->id)
-            ->first();
-
-        if ($reservation) {
-            if ($reservation->status === 'confirmed') {
-                return response()->json(['message' => 'Vous êtes déjà inscrit à ce cours.'], 422);
+            // Vérifier que le cours n'est pas annulé
+            if ($course->status === 'cancelled') {
+                return response()->json(['message' => 'Ce cours a été annulé.'], 422);
             }
-            // Réactiver la réservation annulée
-            $reservation->update(['status' => 'confirmed']);
-        } else {
-            // Créer une nouvelle réservation
-            $reservation = Reservation::create([
-                'user_id'   => $user->id,
-                'course_id' => $course->id,
-                'status'    => 'confirmed',
-            ]);
-        }
 
-        // Mettre à jour la colonne de cache avec le total réel
-        $newConfirmedCount = Reservation::where('course_id', $course->id)
-            ->where('status', 'confirmed')
-            ->count();
-        $course->update(['current_reservations' => $newConfirmedCount]);
+            // Vérifier le cloisonnement par salle (multi-tenant)
+            if ($user->gym_id && $course->gym_id && $user->gym_id !== $course->gym_id) {
+                return response()->json(['message' => 'Ce cours n\'appartient pas à votre salle.'], 403);
+            }
 
-        // Notification pour l'adhérent
-        Notification::create([
-            'user_id' => $user->id,
-            'type'    => 'reservation_confirmed',
-            'title'   => '✅ Réservation confirmée',
-            'message' => "Votre cours {$course->name} est confirmé pour le " .
-                $course->starts_at->format('d/m/Y à H:i') . '.',
-        ]);
+            // Vérifier les places disponibles avec verrouillage des réservations existantes
+            $confirmedCount = Reservation::where('course_id', $course->id)
+                ->where('status', 'confirmed')
+                ->lockForUpdate()
+                ->count();
 
-        // Notification pour le coach
-        if ($course->coach_id) {
+            if ($confirmedCount >= $course->max_capacity) {
+                return response()->json(['message' => 'Ce cours est complet.'], 422);
+            }
+
+            // Vérifier si une réservation existe déjà pour cet adhérent
+            $reservation = Reservation::where('user_id', $user->id)
+                ->where('course_id', $course->id)
+                ->lockForUpdate()
+                ->first();
+
+            if ($reservation) {
+                if ($reservation->status === 'confirmed') {
+                    return response()->json(['message' => 'Vous êtes déjà inscrit à ce cours.'], 422);
+                }
+                // Réactiver la réservation annulée
+                $reservation->update(['status' => 'confirmed']);
+            } else {
+                // Créer une nouvelle réservation
+                $reservation = Reservation::create([
+                    'user_id'   => $user->id,
+                    'course_id' => $course->id,
+                    'status'    => 'confirmed',
+                ]);
+            }
+
+            // Recalculer le compteur réel et mettre à jour le cours
+            $newConfirmedCount = Reservation::where('course_id', $course->id)
+                ->where('status', 'confirmed')
+                ->count();
+            $course->update(['current_reservations' => $newConfirmedCount]);
+
+            // Notification pour l'adhérent
             Notification::create([
-                'user_id' => $course->coach_id,
-                'type'    => 'coach_change',
-                'title'   => '👥 Nouvelle inscription',
-                'message' => "L'adhérent {$user->name} s'est inscrit à votre cours '{$course->name}' du " .
-                    $course->starts_at->format('d/m/Y à H:i') . ".",
+                'user_id' => $user->id,
+                'type'    => 'reservation_confirmed',
+                'title'   => '✅ Réservation confirmée',
+                'message' => "Votre cours {$course->name} est confirmé pour le " .
+                    $course->starts_at->format('d/m/Y à H:i') . '.',
             ]);
-        }
 
-        // Alerte pour l'Administrateur de la salle (Dashboard)
-        Alert::create([
-            'type'    => 'info',
-            'message' => "📅 Nouvelle réservation : {$user->name} s'est inscrit(e) au cours '{$course->name}'.",
-            'room_id' => $course->room_id,
-            'is_read' => false,
-        ]);
+            // Notification pour le coach
+            if ($course->coach_id) {
+                Notification::create([
+                    'user_id' => $course->coach_id,
+                    'type'    => 'coach_change',
+                    'title'   => '👥 Nouvelle inscription',
+                    'message' => "L'adhérent {$user->name} s'est inscrit à votre cours '{$course->name}' du " .
+                        $course->starts_at->format('d/m/Y à H:i') . ".",
+                ]);
+            }
 
-        return response()->json([
-            'message'     => 'Réservation confirmée !',
-            'reservation' => $reservation->load('course'),
-        ], 201);
+            // Alerte pour le manager de la salle
+            Alert::create([
+                'type'    => 'info',
+                'message' => "📅 Nouvelle réservation : {$user->name} s'est inscrit(e) au cours '{$course->name}'.",
+                'room_id' => $course->room_id,
+                'is_read' => false,
+            ]);
+
+            return response()->json([
+                'message'     => 'Réservation confirmée !',
+                'reservation' => $reservation->load('course'),
+            ], 201);
+        });
     }
 
     /**
@@ -174,33 +181,35 @@ class ReservationController extends Controller
     public function destroy(Request $request, int $id)
     {
         $user = $request->user();
-        $reservation = Reservation::where('id', $id)
-            ->where('user_id', $user->id)
-            ->firstOrFail();
 
-        $reservation->update(['status' => 'cancelled']);
+        return DB::transaction(function () use ($user, $id) {
+            $reservation = Reservation::where('id', $id)
+                ->where('user_id', $user->id)
+                ->lockForUpdate()
+                ->firstOrFail();
 
-        $course = Course::find($reservation->course_id);
-        if ($course) {
-            // Mettre à jour la colonne de cache avec le total réel
-            $newConfirmedCount = Reservation::where('course_id', $course->id)
-                ->where('status', 'confirmed')
-                ->count();
-            $course->update(['current_reservations' => max(0, $newConfirmedCount)]);
+            $reservation->update(['status' => 'cancelled']);
 
-            // Notification pour le coach
-            if ($course->coach_id) {
-                \App\Models\Notification::create([
-                    'user_id' => $course->coach_id,
-                    'type'    => 'coach_change',
-                    'title'   => '🚫 Annulation de réservation',
-                    'message' => "L'adhérent {$user->name} a annulé sa réservation pour votre cours '{$course->name}' du " .
-                        $course->starts_at->format('d/m/Y à H:i') . ".",
-                ]);
+            $course = Course::where('id', $reservation->course_id)->lockForUpdate()->first();
+            if ($course) {
+                $newConfirmedCount = Reservation::where('course_id', $course->id)
+                    ->where('status', 'confirmed')
+                    ->count();
+                $course->update(['current_reservations' => max(0, $newConfirmedCount)]);
+
+                if ($course->coach_id) {
+                    Notification::create([
+                        'user_id' => $course->coach_id,
+                        'type'    => 'coach_change',
+                        'title'   => '🚫 Annulation de réservation',
+                        'message' => "L'adhérent {$user->name} a annulé sa réservation pour votre cours '{$course->name}' du " .
+                            $course->starts_at->format('d/m/Y à H:i') . ".",
+                    ]);
+                }
             }
-        }
 
-        return response()->json(['message' => 'Réservation annulée.']);
+            return response()->json(['message' => 'Réservation annulée.']);
+        });
     }
 
     /**

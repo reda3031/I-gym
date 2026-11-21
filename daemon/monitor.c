@@ -1,7 +1,7 @@
 /*
  * I-Gym Monitor Daemon — Service C de surveillance surfrequentation
- * Connexion MySQL via libmysqlclient
- * Boucle infinie sleep(60) — detecte occupation > 80%
+ * Connexion MySQL via libmysqlclient avec configuration dynamique par variables d'environnement
+ * Boucle continue interruptible (SIGTERM/SIGINT) — detecte occupation > seuil (defaut: 80%)
  * Compilation : gcc -o igym_monitor monitor.c -lmysqlclient -lpthread
  */
 
@@ -13,15 +13,14 @@
 #include <time.h>
 #include <mysql/mysql.h>
 
-/* ── Configuration ────────────────────────────────────────────────────── */
-#define DB_HOST     "127.0.0.1"
-#define DB_PORT     3306
-#define DB_NAME     "igym"
-#define DB_USER     "root"
-#define DB_PASS     ""
-#define LOG_FILE    "/tmp/igym_monitor.log"
-#define SLEEP_SEC   60
-#define ALERT_THRESHOLD 0.80
+/* ── Valeurs par defaut sures ─────────────────────────────────────────── */
+#define DEFAULT_DB_HOST         "127.0.0.1"
+#define DEFAULT_DB_PORT         3306
+#define DEFAULT_DB_NAME         "igym"
+#define DEFAULT_DB_USER         "root"
+#define DEFAULT_LOG_FILE        "/tmp/igym_monitor.log"
+#define DEFAULT_SLEEP_SEC       60
+#define DEFAULT_ALERT_THRESHOLD 0.80
 
 /* ── Flag d'arrêt propre (SIGTERM/SIGINT) ─────────────────────────────── */
 static volatile int keep_running = 1;
@@ -30,6 +29,38 @@ void handle_signal(int sig)
 {
     (void)sig;
     keep_running = 0;
+}
+
+/* ── Helpers de lecture des variables d'environnement ─────────────────── */
+static const char *get_env_str(const char *name, const char *alt_name, const char *def_val)
+{
+    const char *val = getenv(name);
+    if (val && *val) return val;
+    if (alt_name) {
+        val = getenv(alt_name);
+        if (val && *val) return val;
+    }
+    return def_val;
+}
+
+static unsigned int get_env_port(const char *name, unsigned int def_port)
+{
+    const char *val = getenv(name);
+    if (val && *val) {
+        int p = atoi(val);
+        if (p > 0) return (unsigned int)p;
+    }
+    return def_port;
+}
+
+static double get_env_double(const char *name, double def_val)
+{
+    const char *val = getenv(name);
+    if (val && *val) {
+        double d = atof(val);
+        if (d > 0.0 && d <= 1.0) return d;
+    }
+    return def_val;
 }
 
 /* ── Écriture dans le log avec timestamp ──────────────────────────────── */
@@ -44,15 +75,20 @@ void log_message(FILE *log_fp, const char *level, const char *msg)
     fflush(log_fp);
 }
 
-/* ── Connexion MySQL ──────────────────────────────────────────────────── */
+/* ── Connexion MySQL dynamique ────────────────────────────────────────── */
 MYSQL *db_connect(void)
 {
+    const char   *host = get_env_str("DB_HOST", NULL, DEFAULT_DB_HOST);
+    unsigned int  port = get_env_port("DB_PORT", DEFAULT_DB_PORT);
+    const char   *name = get_env_str("DB_DATABASE", "DB_NAME", DEFAULT_DB_NAME);
+    const char   *user = get_env_str("DB_USERNAME", "DB_USER", DEFAULT_DB_USER);
+    const char   *pass = get_env_str("DB_PASSWORD", "DB_PASS", "");
+
     MYSQL *conn = mysql_init(NULL);
     if (!conn)
         return NULL;
 
-    if (!mysql_real_connect(conn, DB_HOST, DB_USER, DB_PASS,
-                            DB_NAME, DB_PORT, NULL, 0)) {
+    if (!mysql_real_connect(conn, host, user, pass, name, port, NULL, 0)) {
         mysql_close(conn);
         return NULL;
     }
@@ -60,7 +96,7 @@ MYSQL *db_connect(void)
 }
 
 /* ── Vérification occupation salles ────────────────────────────────────── */
-void check_rooms(MYSQL *conn, FILE *log_fp)
+void check_rooms(MYSQL *conn, FILE *log_fp, double alert_threshold)
 {
     const char *query = "SELECT id, name, current_count, capacity FROM rooms";
     char        insert_buf[512];
@@ -88,7 +124,7 @@ void check_rooms(MYSQL *conn, FILE *log_fp)
         double rate = (double)current_count / (double)capacity;
 
         /* Seuil dépassé : insérer une alerte */
-        if (rate > ALERT_THRESHOLD) {
+        if (rate > alert_threshold) {
             int percent = (int)(rate * 100);
 
             snprintf(log_buf, sizeof(log_buf),
@@ -96,7 +132,7 @@ void check_rooms(MYSQL *conn, FILE *log_fp)
                      room_name, percent, current_count, capacity);
             log_message(log_fp, "ALERT", log_buf);
 
-            /* Vérifier qu'une alerte non lue n'existe pas déjà */
+            /* Vérifier qu'une alerte non lue n'existe pas déjà sur les 30 dernières minutes */
             snprintf(insert_buf, sizeof(insert_buf),
                 "INSERT INTO alerts (type, message, room_id, is_read, created_at, updated_at) "
                 "SELECT 'surfrequentation', "
@@ -126,23 +162,26 @@ void check_rooms(MYSQL *conn, FILE *log_fp)
 /* ── Point d'entrée ───────────────────────────────────────────────────── */
 int main(void)
 {
-    char log_buf[256];
+    char         log_buf[256];
+    const char  *log_file   = get_env_str("LOG_FILE", "IGYM_LOG_FILE", DEFAULT_LOG_FILE);
+    unsigned int sleep_sec  = get_env_port("SLEEP_SEC", DEFAULT_SLEEP_SEC);
+    double       threshold  = get_env_double("ALERT_THRESHOLD", DEFAULT_ALERT_THRESHOLD);
 
     /* Gestion signaux pour arrêt propre */
     signal(SIGTERM, handle_signal);
     signal(SIGINT,  handle_signal);
 
     /* Ouvrir le fichier de log */
-    FILE *log_fp = fopen(LOG_FILE, "a");
+    FILE *log_fp = fopen(log_file, "a");
     if (!log_fp) {
-        fprintf(stderr, "Impossible d'ouvrir %s\n", LOG_FILE);
+        fprintf(stderr, "Impossible d'ouvrir %s\n", log_file);
         return EXIT_FAILURE;
     }
 
     log_message(log_fp, "INFO", "=== I-Gym Monitor Daemon demarre ===");
     snprintf(log_buf, sizeof(log_buf),
-             "Seuil alerte: %.0f%% | Intervalle: %ds",
-             ALERT_THRESHOLD * 100, SLEEP_SEC);
+             "Seuil alerte: %.0f%% | Intervalle: %us | Log: %s",
+             threshold * 100.0, sleep_sec, log_file);
     log_message(log_fp, "INFO", log_buf);
 
     /* Boucle principale */
@@ -150,15 +189,15 @@ int main(void)
         MYSQL *conn = db_connect();
 
         if (!conn) {
-            log_message(log_fp, "ERROR", "Connexion MySQL echouee — nouvelle tentative dans 60s");
+            log_message(log_fp, "ERROR", "Connexion MySQL echouee — nouvelle tentative...");
         } else {
             log_message(log_fp, "INFO", "Verification des salles...");
-            check_rooms(conn, log_fp);
+            check_rooms(conn, log_fp, threshold);
             mysql_close(conn);
         }
 
-        /* Attendre SLEEP_SEC secondes (interruptible par signal) */
-        for (int i = 0; i < SLEEP_SEC && keep_running; i++)
+        /* Attendre sleep_sec secondes (interruptible par signal) */
+        for (unsigned int i = 0; i < sleep_sec && keep_running; i++)
             sleep(1);
     }
 

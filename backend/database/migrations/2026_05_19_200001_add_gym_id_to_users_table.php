@@ -18,10 +18,12 @@ return new class extends Migration
             // donc on utilise une colonne string temporairement lors du fresh seed
         });
 
-        // Modifier l'ENUM role pour ajouter super_admin
-        \Illuminate\Support\Facades\DB::statement(
-            "ALTER TABLE users MODIFY role ENUM('adherent','coach','admin','super_admin') DEFAULT 'adherent'"
-        );
+        // Modifier l'ENUM role pour ajouter super_admin (spécifique à MySQL)
+        if (\Illuminate\Support\Facades\DB::getDriverName() === 'mysql') {
+            \Illuminate\Support\Facades\DB::statement(
+                "ALTER TABLE users MODIFY role ENUM('adherent','coach','admin','super_admin') DEFAULT 'adherent'"
+            );
+        }
     }
 
     public function down(): void
@@ -31,8 +33,10 @@ return new class extends Migration
             $table->dropColumn('gym_id');
         });
 
-        \Illuminate\Support\Facades\DB::statement(
-            "ALTER TABLE users MODIFY role ENUM('adherent','coach','admin') DEFAULT 'adherent'"
-        );
+        if (\Illuminate\Support\Facades\DB::getDriverName() === 'mysql') {
+            \Illuminate\Support\Facades\DB::statement(
+                "ALTER TABLE users MODIFY role ENUM('adherent','coach','admin') DEFAULT 'adherent'"
+            );
+        }
     }
 };
